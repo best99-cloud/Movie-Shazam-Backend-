@@ -10,11 +10,10 @@ def home():
 
 @app.post("/upload")
 async def upload(file: UploadFile):
-    content = await file.read()
-    image = Image.open(io.BytesIO(content))
-
+    data = await file.read()
+    img = Image.open(io.BytesIO(data))
     return {
         "filename": file.filename,
-        "format": image.format,
-        "size": image.size
+        "width": img.width,
+        "height": img.height
     }
