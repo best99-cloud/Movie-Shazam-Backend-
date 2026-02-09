@@ -4,5 +4,5 @@ pillow
 python-multipart
 torch
 torchvision
-git+https://github.com/openai/CLIP.git
+openai-clip
 faiss-cpu
