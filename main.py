@@ -7,17 +7,14 @@ import base64
 
 app = FastAPI()
 
+# HuggingFace token (already set on Railway)
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
+# Correct CLIP endpoint
 MODEL_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-large-patch14"
 
-HEADERS = {
-    "Authorization": f"Bearer {HF_TOKEN}",
-    "Content-Type": "application/json"
-}
-
 # -------------------------------
-# Reference images
+# Reference images (posters / frames)
 # -------------------------------
 MOVIE_DB = [
     {
@@ -40,38 +37,55 @@ MOVIE_DB = [
         "where": "Crunchyroll",
         "image": "https://upload.wikimedia.org/wikipedia/en/9/94/NarutoCoverTankobon1.jpg",
         "vector": None
-    },
+    }
 ]
 
 # -------------------------------
-# HuggingFace CLIP embedding (CORRECT FORMAT)
+# HuggingFace CLIP embedding
 # -------------------------------
 def get_embedding(image_bytes):
-    try:
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
+    if not HF_TOKEN:
+        print("HF_TOKEN missing")
+        return None
 
-        payload = {
-            "inputs": b64
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    payload = {
+        "inputs": {
+            "image": b64
         }
+    }
 
+    try:
         r = requests.post(
             MODEL_URL,
-            headers=HEADERS,
+            headers={
+                "Authorization": f"Bearer {HF_TOKEN}",
+                "Content-Type": "application/json"
+            },
             json=payload,
             timeout=60
         )
 
-        r.raise_for_status()
+        if r.status_code != 200:
+            print("HF error:", r.status_code, r.text)
+            return None
+
         data = r.json()
 
-        # HF returns [[[...]]] sometimes
-        if isinstance(data, list):
-            data = np.array(data).squeeze()
+        # HuggingFace sometimes returns nested arrays
+        while isinstance(data, list):
+            data = data[0]
 
-        return np.array(data, dtype=np.float32)
+        vec = np.array(data, dtype=np.float32)
+
+        if vec.ndim > 1:
+            vec = vec.mean(axis=0)
+
+        return vec
 
     except Exception as e:
-        print("Embedding error:", e)
+        print("Embedding exception:", e)
         return None
 
 # -------------------------------
@@ -83,24 +97,23 @@ def similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # -------------------------------
-# Background preload
+# Preload reference embeddings
 # -------------------------------
 def prepare_database():
     for item in MOVIE_DB:
         try:
-            img = requests.get(item["image"], timeout=20).content
-            vec = get_embedding(img)
-            item["vector"] = vec
-            print("Loaded:", item["title"])
+            print("Embedding:", item["title"])
+            img = requests.get(item["image"], timeout=15).content
+            item["vector"] = get_embedding(img)
         except Exception as e:
-            print("Failed loading", item["title"], e)
+            print("Failed:", item["title"], e)
 
 @app.on_event("startup")
 def startup_event():
-    threading.Thread(target=prepare_database, daemon=True).start()
+    threading.Thread(target=prepare_database).start()
 
 # -------------------------------
-# Routes
+# API routes
 # -------------------------------
 @app.get("/")
 def home():
