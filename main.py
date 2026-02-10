@@ -1,34 +1,85 @@
 from fastapi import FastAPI, UploadFile, File
-from PIL import Image
-import io
 import requests
 import os
 import numpy as np
+import base64
 
 app = FastAPI()
 
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
 MODEL_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/openai/clip-vit-large-patch14"
+
 HEADERS = {
     "Authorization": f"Bearer {HF_TOKEN}"
 }
 
-# Demo database (we will expand this later)
+# -------------------------------
+# Reference images (POSTERS / SCENES)
+# -------------------------------
 MOVIE_DB = [
-    {"title": "Inception", "type": "Movie", "where": "Netflix", "vector": None},
-    {"title": "Breaking Bad", "type": "TV Show", "where": "Netflix", "vector": None},
-    {"title": "Naruto", "type": "Anime", "where": "Crunchyroll", "vector": None},
+    {
+        "title": "Inception",
+        "type": "Movie",
+        "where": "Netflix",
+        "image": "https://upload.wikimedia.org/wikipedia/en/7/7f/Inception_ver3.jpg",
+        "vector": None
+    },
+    {
+        "title": "Breaking Bad",
+        "type": "TV Show",
+        "where": "Netflix",
+        "image": "https://upload.wikimedia.org/wikipedia/en/6/61/Breaking_Bad_title_card.png",
+        "vector": None
+    },
+    {
+        "title": "Naruto",
+        "type": "Anime",
+        "where": "Crunchyroll",
+        "image": "https://upload.wikimedia.org/wikipedia/en/9/94/NarutoCoverTankobon1.jpg",
+        "vector": None
+    },
 ]
 
+# -------------------------------
+# CLIP embedding via HuggingFace
+# -------------------------------
 def get_embedding(image_bytes):
-    r = requests.post(MODEL_URL, headers=HEADERS, data=image_bytes)
-    emb = r.json()
-    return np.array(emb).mean(axis=0)
+    response = requests.post(
+        MODEL_URL,
+        headers=HEADERS,
+        data=image_bytes,
+    )
 
+    data = response.json()
+
+    if isinstance(data, dict) and "error" in data:
+        raise Exception(data["error"])
+
+    return np.array(data).mean(axis=0)
+
+# -------------------------------
+# Cosine similarity
+# -------------------------------
 def similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
+# -------------------------------
+# Pre-embed reference images
+# -------------------------------
+def prepare_database():
+    for item in MOVIE_DB:
+        if item["vector"] is None:
+            print("Embedding:", item["title"])
+            img = requests.get(item["image"]).content
+            item["vector"] = get_embedding(img)
+
+# Run once on startup
+prepare_database()
+
+# -------------------------------
+# Routes
+# -------------------------------
 @app.get("/")
 def home():
     return {"status": "Movie Shazam AI running"}
@@ -42,9 +93,6 @@ async def upload(file: UploadFile = File(...)):
     best_score = -1
 
     for item in MOVIE_DB:
-        if item["vector"] is None:
-            item["vector"] = img_vec
-
         score = similarity(img_vec, item["vector"])
         if score > best_score:
             best_score = score
@@ -54,5 +102,5 @@ async def upload(file: UploadFile = File(...)):
         "match": best["title"],
         "type": best["type"],
         "where_to_watch": best["where"],
-        "confidence": float(best_score)
+        "confidence": round(best_score, 4)
     }
