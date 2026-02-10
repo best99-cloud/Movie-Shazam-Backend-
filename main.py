@@ -3,6 +3,7 @@ import requests
 import os
 import numpy as np
 import threading
+import base64
 
 app = FastAPI()
 
@@ -11,7 +12,8 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 MODEL_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-large-patch14"
 
 HEADERS = {
-    "Authorization": f"Bearer {HF_TOKEN}"
+    "Authorization": f"Bearer {HF_TOKEN}",
+    "Content-Type": "application/json"
 }
 
 # -------------------------------
@@ -42,29 +44,31 @@ MOVIE_DB = [
 ]
 
 # -------------------------------
-# Safe HuggingFace embedding
+# HuggingFace CLIP embedding (CORRECT FORMAT)
 # -------------------------------
 def get_embedding(image_bytes):
     try:
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        payload = {
+            "inputs": b64
+        }
+
         r = requests.post(
             MODEL_URL,
             headers=HEADERS,
-            data=image_bytes,
-            timeout=30
+            json=payload,
+            timeout=60
         )
+
         r.raise_for_status()
         data = r.json()
 
-        # HF sometimes returns [[[...]]]
-        if isinstance(data, list) and isinstance(data[0], list):
-            data = data[0]
+        # HF returns [[[...]]] sometimes
+        if isinstance(data, list):
+            data = np.array(data).squeeze()
 
-        vec = np.array(data, dtype=np.float32)
-
-        if len(vec.shape) > 1:
-            vec = vec.mean(axis=0)
-
-        return vec
+        return np.array(data, dtype=np.float32)
 
     except Exception as e:
         print("Embedding error:", e)
@@ -79,12 +83,12 @@ def similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # -------------------------------
-# Background preload (DOES NOT BLOCK STARTUP)
+# Background preload
 # -------------------------------
 def prepare_database():
     for item in MOVIE_DB:
         try:
-            img = requests.get(item["image"], timeout=15).content
+            img = requests.get(item["image"], timeout=20).content
             vec = get_embedding(img)
             item["vector"] = vec
             print("Loaded:", item["title"])
@@ -93,7 +97,7 @@ def prepare_database():
 
 @app.on_event("startup")
 def startup_event():
-    threading.Thread(target=prepare_database).start()
+    threading.Thread(target=prepare_database, daemon=True).start()
 
 # -------------------------------
 # Routes
