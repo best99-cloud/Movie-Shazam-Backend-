@@ -1,8 +1,5 @@
 fastapi
 uvicorn
-pillow
 python-multipart
-torch
-torchvision
-openai-clip
-faiss-cpu
+requests
+numpy
