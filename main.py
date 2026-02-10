@@ -8,7 +8,7 @@ app = FastAPI()
 
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-MODEL_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/openai/clip-vit-large-patch14"
+MODEL_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-large-patch14"
 
 HEADERS = {
     "Authorization": f"Bearer {HF_TOKEN}"
