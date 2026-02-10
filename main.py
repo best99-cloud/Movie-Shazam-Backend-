@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 import requests
 import os
 import numpy as np
-import base64
+import threading
 
 app = FastAPI()
 
@@ -15,7 +15,7 @@ HEADERS = {
 }
 
 # -------------------------------
-# Reference images (POSTERS / SCENES)
+# Reference images
 # -------------------------------
 MOVIE_DB = [
     {
@@ -42,40 +42,58 @@ MOVIE_DB = [
 ]
 
 # -------------------------------
-# CLIP embedding via HuggingFace
+# Safe HuggingFace embedding
 # -------------------------------
 def get_embedding(image_bytes):
-    response = requests.post(
-        MODEL_URL,
-        headers=HEADERS,
-        data=image_bytes,
-    )
+    try:
+        r = requests.post(
+            MODEL_URL,
+            headers=HEADERS,
+            data=image_bytes,
+            timeout=30
+        )
+        r.raise_for_status()
+        data = r.json()
 
-    data = response.json()
+        # HF sometimes returns [[[...]]]
+        if isinstance(data, list) and isinstance(data[0], list):
+            data = data[0]
 
-    if isinstance(data, dict) and "error" in data:
-        raise Exception(data["error"])
+        vec = np.array(data, dtype=np.float32)
 
-    return np.array(data).mean(axis=0)
+        if len(vec.shape) > 1:
+            vec = vec.mean(axis=0)
+
+        return vec
+
+    except Exception as e:
+        print("Embedding error:", e)
+        return None
 
 # -------------------------------
 # Cosine similarity
 # -------------------------------
 def similarity(a, b):
+    if a is None or b is None:
+        return -1
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # -------------------------------
-# Pre-embed reference images
+# Background preload (DOES NOT BLOCK STARTUP)
 # -------------------------------
 def prepare_database():
     for item in MOVIE_DB:
-        if item["vector"] is None:
-            print("Embedding:", item["title"])
-            img = requests.get(item["image"]).content
-            item["vector"] = get_embedding(img)
+        try:
+            img = requests.get(item["image"], timeout=15).content
+            vec = get_embedding(img)
+            item["vector"] = vec
+            print("Loaded:", item["title"])
+        except Exception as e:
+            print("Failed loading", item["title"], e)
 
-# Run once on startup
-prepare_database()
+@app.on_event("startup")
+def startup_event():
+    threading.Thread(target=prepare_database).start()
 
 # -------------------------------
 # Routes
@@ -89,6 +107,9 @@ async def upload(file: UploadFile = File(...)):
     image_bytes = await file.read()
     img_vec = get_embedding(image_bytes)
 
+    if img_vec is None:
+        return {"error": "Failed to analyze image"}
+
     best = None
     best_score = -1
 
@@ -97,6 +118,9 @@ async def upload(file: UploadFile = File(...)):
         if score > best_score:
             best_score = score
             best = item
+
+    if best is None:
+        return {"error": "No match"}
 
     return {
         "match": best["title"],
